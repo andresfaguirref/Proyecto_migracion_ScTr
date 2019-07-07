@@ -1,19 +1,26 @@
 package sdm.migrador;
 
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
 import java.sql.Connection;
+import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Properties;
 
-import org.apache.commons.dbcp2.BasicDataSource;
-import org.apache.commons.dbcp2.BasicDataSourceFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.macroproyectos.ecm.ContainerManager;
 import com.macroproyectos.ecm.node.MPDataNode;
+import com.macroproyectos.ecm.node.MPNodeType;
+import com.macroproyectos.ecm.node.MPProperty;
 import com.macroproyectos.ecm.store.DocumentStoreManager;
 
 public class Main {
@@ -24,17 +31,20 @@ public class Main {
 	static boolean runnig = true;
 	static boolean noMore;
 
-	static BasicDataSource ds;
 	static Connection conn;
 	static PreparedStatement ps;
 	static ResultSet rs;
 	static PreparedStatement psInsert;
 	static PreparedStatement psUpdate;
+	static PreparedStatement psProps;
+	static PreparedStatement psPath;
 
 	static int migrados;
 
+	static Object typesLock = new Object();
+
 	static synchronized Toc findNext() throws SQLException {
-		if (!runnig || noMore || migrados > 35) {
+		if (!runnig || noMore || migrados > 100) {
 			return null;
 		}
 		if (rs.next()) {
@@ -53,9 +63,35 @@ public class Main {
 		Toc toc = new Toc();
 		toc.id = rs.getLong(1);
 		toc.name = rs.getString(2);
-		toc.created = rs.getDate(3);
-		toc.modified = rs.getDate(4);
-		toc.path = rs.getString(5);
+		toc.path = rs.getString(3);
+		toc.type = rs.getInt(4);
+
+		if (toc.isFile()) {
+			psPath.setLong(1, toc.id);
+			try (ResultSet rs = psPath.executeQuery()) {
+				rs.next();
+				toc.file = new File(rs.getString(2), rs.getString(1));
+				toc.nodeType = rs.getString(3);
+			}
+
+			toc.properties = new HashMap<>();
+
+			psProps.setLong(1, toc.id);
+			try (ResultSet rs = psProps.executeQuery()) {
+				while (rs.next()) {
+					Object value;
+					if ("S".equals(rs.getString(2))) {
+						value = rs.getString(4);
+						if (value == null) {
+							value = "";
+						}
+					} else {
+						value = rs.getDate(3);
+					}
+					toc.properties.put(rs.getString(1), value);
+				}
+			}
+		}
 
 		psInsert.setLong(1, toc.id);
 		psInsert.executeUpdate();
@@ -92,12 +128,13 @@ public class Main {
 			log.error("", e);
 			Thread.currentThread().interrupt();
 		}
+		close(psPath);
+		close(psProps);
 		close(psUpdate);
 		close(psInsert);
 		close(rs);
 		close(ps);
 		close(conn);
-		close(ds);
 		DocumentStoreManager.destroyStores();
 		log.info("Total migrados {}", migrados);
 		log.info("Migracion finalizada");
@@ -109,13 +146,26 @@ public class Main {
 		ContainerManager cm = new ContainerManager();
 		try {
 			cm.initializeRepository("admin", "admin", "laserfiche");
+			List<MPNodeType> all = cm.retrieveAllNodeTypes();
+			MPNodeType carpeta = null;
+			Map<String, MPNodeType> nodeTypes = new HashMap<>();
+			for (MPNodeType type : all) {
+				if (carpeta == null && "carpeta".equals(type.getNodeName())) {
+					carpeta = type;
+				} else {
+					nodeTypes.put(type.getNodeName(), type);
+				}
+			}
+			if (carpeta == null) {
+				throw new IllegalStateException("No existe el tipo de nodo 'carpeta'");
+			}
 			while (runnig) {
 				Toc toc = findNext();
 				if (toc == null || !runnig) {
 					break;
 				}
 
-				String name = toc.name.replaceAll("[^a-zA-Z0-9]", "_");
+				String name = normalize(toc.name);
 				String ruta;
 				if ("/".equals(toc.path)) {
 					ruta = "/" + name;
@@ -123,22 +173,51 @@ public class Main {
 					ruta = toc.path + "/" + name;
 				}
 
-				log.info("Insertando {}", ruta);
+				MPNodeType nodeType;
+				Map<String, Object> props = new HashMap<>();
+				if (toc.isFile()) {
+					log.info("Insertando archivo {}", ruta);
+					synchronized (typesLock) {
+						nodeType = nodeTypes.get(toc.nodeType);
+						if (nodeType == null) {
+							String nodeName = normalize(toc.nodeType);
 
-				HashMap<String, Object> props = new HashMap<>();
-				props.put("tocid", toc.id);
-				// props.put("creado", toc.created)
-				// props.put("modificado", toc.modified)
-				props.put("nombreOriginal", toc.name);
+							nodeType = new MPNodeType();
+							nodeType.setFile(true);
+							nodeType.setNodeName(nodeName);
+							nodeType.setMixin(false);
 
-				MPDataNode dataNode = MPDataNode.createDataNode(name, cm.retrieveNodeType("carpeta"));
+							checkNodeTypeProperties(nodeType, props, toc.properties);
+							cm.loadNodeDataType(nodeType);
+
+							nodeTypes.put(toc.nodeType, nodeType);
+						} else {
+							if (checkNodeTypeProperties(nodeType, props, toc.properties)) {
+								cm.updateNodeType(nodeType);
+							}
+						}
+					}
+				} else {
+					log.info("Insertando carpeta {}", ruta);
+
+					nodeType = carpeta;
+					props.put("tocid", toc.id);
+					props.put("nombreOriginal", toc.name);
+				}
+				MPDataNode dataNode = MPDataNode.createDataNode(name, nodeType);
 				dataNode.setProperties(props);
 				dataNode.setParent(toc.path);
+
+				if (toc.isFile()) {
+					dataNode.setContent(Files.readAllBytes(toc.file.toPath()));
+					dataNode.setContentFileName(name + ".pdf");
+					dataNode.setMimeType("application/pdf");
+				}
 				cm.persistDataNode(dataNode);
 
 				update(toc.id, ruta);
 			}
-		} catch (SQLException e) {
+		} catch (SQLException | IOException e) {
 			throw new MException(e);
 		} finally {
 			try {
@@ -178,21 +257,49 @@ public class Main {
 
 		Runtime.getRuntime().addShutdownHook(new Thread(Main::stop));
 
-		ds = BasicDataSourceFactory.createDataSource(dbProps);
-		conn = ds.getConnection();
+		conn = DriverManager.getConnection(dbProps.getProperty("url"), dbProps);
 
 		try (PreparedStatement delete = conn.prepareStatement("delete from dbo.migrados where path is null")) {
 			delete.executeUpdate();
 		}
 
 		ps = conn.prepareStatement(
-				"select t.tocid, t.name, t.created, t.modified, p.path from dbo.toc t join dbo.migrados p on p.tocid = t.parentid left join dbo.migrados m on m.tocid = t.tocid where m.tocid is null and p.path is not null and t.etype = 0");
+				"select t.tocid, t.name, p.path, t.etype from dbo.toc t join dbo.migrados p on p.tocid = t.parentid left join dbo.migrados m on m.tocid = t.tocid where m.tocid is null and p.path is not null");
 		rs = ps.executeQuery();
 		psInsert = conn.prepareStatement("insert into dbo.migrados (tocid) values (?)");
 		psUpdate = conn.prepareStatement("update dbo.migrados set path = ? where tocid = ?");
+		psProps = conn.prepareStatement(
+				"select d.prop_name, d.prop_type, v.date_val, v.str_val from dbo.propval v join dbo.propdef d on v.prop_id = d.prop_id where v.tocid = ?");
+		psPath = conn.prepareStatement(
+				"select l.path1, v.fixpath, s.pset_name from dbo.toc t join dbo.activity_log l on t.tocid = l.tocid1 join dbo.propset s on s.pset_id = t.pset_id join dbo.vol v on v.vol_id = t.vol_id where t.tocid = ?");
 
 		for (Thread t : threads) {
 			t.start();
 		}
+	}
+
+	static boolean checkNodeTypeProperties(MPNodeType nodeType, Map<String, Object> values, Map<String, Object> props) {
+		Map<String, MPProperty> currentProps = nodeType.getProperties();
+		boolean modified = false;
+		for (Entry<String, Object> property : props.entrySet()) {
+			String name = normalize(property.getKey());
+			if (!currentProps.containsKey(name)) {
+				MPProperty prop = new MPProperty();
+				prop.setName(name);
+				prop.setDataType(property.getValue() instanceof String ? MPProperty.STRING : MPProperty.DATE);
+				prop.setAutocreated(false);
+				prop.setMandatory(false);
+				prop.setMultiple(false);
+				prop.setValue(null);
+				nodeType.addProperty(prop);
+				modified = true;
+			}
+			values.put(name, property.getValue());
+		}
+		return modified;
+	}
+
+	static String normalize(String name) {
+		return name.replaceAll("[^a-zA-Z0-9]", "_");
 	}
 }
