@@ -2,6 +2,7 @@ package sdm.migrador;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -13,6 +14,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Properties;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,8 +46,35 @@ public class Main {
 
 	static Object typesLock = new Object();
 
+	static MPNodeType carpeta;
+	static MPNodeType archivo;
+	static Map<String, MPNodeType> nodeTypes;
+
+	static Pattern regex = Pattern.compile("[^a-zA-Z0-9]");
+
+	static String username;
+	static String password;
+	static String repository;
+
+	static Map<Character, Character> chars;
+	static {
+		chars = new HashMap<>();
+		chars.put('\u00C1', 'A');
+		chars.put('\u00C9', 'E');
+		chars.put('\u00CD', 'I');
+		chars.put('\u00D3', 'O');
+		chars.put('\u00DA', 'U');
+		chars.put('\u00E1', 'a');
+		chars.put('\u00E9', 'e');
+		chars.put('\u00ED', 'i');
+		chars.put('\u00F3', 'o');
+		chars.put('\u00FA', 'u');
+		chars.put('\u00D1', 'N');
+		chars.put('\u00F1', 'n');
+	}
+
 	static synchronized Toc findNext() throws SQLException {
-		if (!runnig || noMore || migrados > 100) {
+		if (!runnig || noMore/* || migrados > 100*/) {
 			return null;
 		}
 		if (rs.next()) {
@@ -140,25 +170,90 @@ public class Main {
 		log.info("Migracion finalizada");
 	}
 
-	static void hilo() {
-		log.info("Iniciando hilo {}", Thread.currentThread().getName());
+	static void addProperty(MPNodeType nodeType, String name, int dataType) {
+		MPProperty prop = new MPProperty();
+		prop.setName(name);
+		prop.setDataType(dataType);
+		prop.setAutocreated(false);
+		prop.setMandatory(false);
+		prop.setMultiple(false);
+		nodeType.addProperty(prop);
+	}
 
-		ContainerManager cm = new ContainerManager();
-		try {
-			cm.initializeRepository("admin", "admin", "laserfiche");
-			List<MPNodeType> all = cm.retrieveAllNodeTypes();
-			MPNodeType carpeta = null;
-			Map<String, MPNodeType> nodeTypes = new HashMap<>();
-			for (MPNodeType type : all) {
-				if (carpeta == null && "carpeta".equals(type.getNodeName())) {
-					carpeta = type;
-				} else {
-					nodeTypes.put(type.getNodeName(), type);
+	static boolean checkNodeTypeProperties(MPNodeType nodeType, Map<String, Object> values, Map<String, Object> props) {
+		Map<String, MPProperty> currentProps = nodeType.getProperties();
+		boolean modified = false;
+		for (Entry<String, Object> property : props.entrySet()) {
+			String name = normalize(property.getKey());
+			if (!currentProps.containsKey(name)) {
+				addProperty(nodeType, name,
+						property.getValue() instanceof String ? MPProperty.STRING : MPProperty.DATE);
+				modified = true;
+			}
+			values.put(name, property.getValue());
+		}
+		return modified;
+	}
+
+	static String normalize(String name) {
+		Matcher matcher = regex.matcher(name);
+		if (matcher.find()) {
+			StringBuilder sb = new StringBuilder(name.length());
+			int index = 0;
+			do {
+				int start = matcher.start();
+				for (int i = index; i < start; i++) {
+					sb.append(name.charAt(i));
 				}
+				Character c = chars.get(name.charAt(start));
+				if (c == null) {
+					c = '_';
+				}
+				sb.append(c);
+				index = start + 1;
+			} while (matcher.find());
+			for (int i = index; i < name.length(); i++) {
+				sb.append(name.charAt(i));
 			}
-			if (carpeta == null) {
-				throw new IllegalStateException("No existe el tipo de nodo 'carpeta'");
-			}
+			return sb.toString();
+		}
+		return name;
+	}
+
+	static MPNodeType makeNodeType(String name, boolean file) {
+		MPNodeType nodeType = new MPNodeType();
+		nodeType.setNodeName(name);
+		nodeType.setFile(file);
+		nodeType.setMixin(false);
+
+		addProperty(nodeType, "tocid", MPProperty.LONG);
+		addProperty(nodeType, "nombreOriginal", MPProperty.STRING);
+
+		nodeTypes.put(name, nodeType);
+		return nodeType;
+	}
+
+	static ContainerManager ecm() {
+		ContainerManager cm = new ContainerManager();
+		cm.initializeRepository(username, password, repository);
+		return cm;
+	}
+
+	static Properties props(String path) throws IOException {
+		Properties props = new Properties();
+		try (InputStream stream = Main.class.getResourceAsStream(path)) {
+			props.load(stream);
+		}
+		return props;
+	}
+
+	static void hilo() {
+		String threadName = Thread.currentThread().getName();
+
+		log.info("Iniciando hilo {}", threadName);
+
+		ContainerManager cm = ecm();
+		try {
 			while (runnig) {
 				Toc toc = findNext();
 				if (toc == null || !runnig) {
@@ -176,34 +271,36 @@ public class Main {
 				MPNodeType nodeType;
 				Map<String, Object> props = new HashMap<>();
 				if (toc.isFile()) {
-					log.info("Insertando archivo {}", ruta);
-					synchronized (typesLock) {
-						nodeType = nodeTypes.get(toc.nodeType);
-						if (nodeType == null) {
-							String nodeName = normalize(toc.nodeType);
-
-							nodeType = new MPNodeType();
-							nodeType.setFile(true);
-							nodeType.setNodeName(nodeName);
-							nodeType.setMixin(false);
-
-							checkNodeTypeProperties(nodeType, props, toc.properties);
-							cm.loadNodeDataType(nodeType);
-
-							nodeTypes.put(toc.nodeType, nodeType);
-						} else {
+					log.info("Hilo {}, Archivo {}", threadName, ruta);
+					if (toc.nodeType == null) {
+						nodeType = archivo;
+						synchronized (typesLock) {
 							if (checkNodeTypeProperties(nodeType, props, toc.properties)) {
 								cm.updateNodeType(nodeType);
 							}
 						}
+					} else {
+						String nodeName = normalize(toc.nodeType);
+						synchronized (typesLock) {
+							nodeType = nodeTypes.get(nodeName);
+							if (nodeType == null) {
+								nodeType = makeNodeType(nodeName, true);
+								checkNodeTypeProperties(nodeType, props, toc.properties);
+								cm.loadNodeDataType(nodeType);
+							} else {
+								if (checkNodeTypeProperties(nodeType, props, toc.properties)) {
+									cm.updateNodeType(nodeType);
+								}
+							}
+						}
 					}
 				} else {
-					log.info("Insertando carpeta {}", ruta);
-
+					log.info("Hilo {}, Carpeta {}", threadName, ruta);
 					nodeType = carpeta;
-					props.put("tocid", toc.id);
-					props.put("nombreOriginal", toc.name);
 				}
+				props.put("tocid", toc.id);
+				props.put("nombreOriginal", toc.name);
+
 				MPDataNode dataNode = MPDataNode.createDataNode(name, nodeType);
 				dataNode.setProperties(props);
 				dataNode.setParent(toc.path);
@@ -227,7 +324,7 @@ public class Main {
 			}
 		}
 
-		log.info("Finalizando hilo {}", Thread.currentThread().getName());
+		log.info("Finalizando hilo {}", threadName);
 	}
 
 	public static void main(String[] args) throws Exception {
@@ -239,16 +336,43 @@ public class Main {
 
 		log.info("Iniciando migracion");
 
+		Properties dbProps = props("/db.properties");
+
+		Properties migradorProps = props("/migrador.properties");
+		username = migradorProps.getProperty("username");
+		password = migradorProps.getProperty("password");
+		repository = migradorProps.getProperty("repository");
+
 		int total = 1;
 		if (args != null && args.length == 1) {
+			if ("reset".equals(args[0])) {
+				log.info("Borrando migracion");
+				ContainerManager cm = ecm();
+				try {
+					for (MPDataNode node : cm.retrieveChildDataNodesByPath("/")) {
+						cm.removeDataNodeWithDescendants(node.getAbsolutePath());
+					}
+					for (MPNodeType type : cm.retrieveAllNodeTypes()) {
+						cm.removeNodeType(type.getNodeName());
+					}
+				} finally {
+					cm.closeResources();
+					DocumentStoreManager.destroyStores();
+				}
+
+				try (Connection conn = DriverManager.getConnection(dbProps.getProperty("url"), dbProps)) {
+					try (PreparedStatement ps = conn.prepareStatement("delete from dbo.migrados where tocid > 1")) {
+						ps.executeUpdate();
+					}
+				}
+				log.info("Finalizado borrado migracion");
+				return;
+			}
 			total = Integer.parseInt(args[0]);
 			if (total < 1) {
 				throw new IllegalArgumentException(args[0]);
 			}
 		}
-
-		Properties dbProps = new Properties();
-		dbProps.load(Main.class.getResourceAsStream("/db.properties"));
 
 		threads = new Thread[total];
 		for (int i = 0; i < total; i++) {
@@ -264,42 +388,38 @@ public class Main {
 		}
 
 		ps = conn.prepareStatement(
-				"select t.tocid, t.name, p.path, t.etype from dbo.toc t join dbo.migrados p on p.tocid = t.parentid left join dbo.migrados m on m.tocid = t.tocid where m.tocid is null and p.path is not null");
+				"select t.tocid, t.name, p.path, t.etype from dbo.toc t join dbo.migrados p on p.tocid = t.parentid left join dbo.migrados m on m.tocid = t.tocid where m.tocid is null and p.path is not null /*and t.etype = 0*/");
 		rs = ps.executeQuery();
 		psInsert = conn.prepareStatement("insert into dbo.migrados (tocid) values (?)");
 		psUpdate = conn.prepareStatement("update dbo.migrados set path = ? where tocid = ?");
 		psProps = conn.prepareStatement(
 				"select d.prop_name, d.prop_type, v.date_val, v.str_val from dbo.propval v join dbo.propdef d on v.prop_id = d.prop_id where v.tocid = ?");
 		psPath = conn.prepareStatement(
-				"select l.path1, v.fixpath, s.pset_name from dbo.toc t join dbo.activity_log l on t.tocid = l.tocid1 join dbo.propset s on s.pset_id = t.pset_id join dbo.vol v on v.vol_id = t.vol_id where t.tocid = ?");
+				"select l.path1, v.fixpath, s.pset_name from dbo.toc t join dbo.activity_log l on t.tocid = l.tocid1 left join dbo.propset s on s.pset_id = t.pset_id join dbo.vol v on v.vol_id = t.vol_id where t.tocid = ?");
+
+		ContainerManager cm = ecm();
+		try {
+			List<MPNodeType> all = cm.retrieveAllNodeTypes();
+			nodeTypes = new HashMap<>();
+			for (MPNodeType type : all) {
+				nodeTypes.put(type.getNodeName(), type);
+			}
+			carpeta = nodeTypes.computeIfAbsent("carpeta", k -> {
+				MPNodeType nodeType = makeNodeType(k, false);
+				cm.loadNodeDataType(nodeType);
+				return nodeType;
+			});
+			archivo = nodeTypes.computeIfAbsent("archivo", k -> {
+				MPNodeType nodeType = makeNodeType(k, true);
+				cm.loadNodeDataType(nodeType);
+				return nodeType;
+			});
+		} finally {
+			cm.closeResources();
+		}
 
 		for (Thread t : threads) {
 			t.start();
 		}
-	}
-
-	static boolean checkNodeTypeProperties(MPNodeType nodeType, Map<String, Object> values, Map<String, Object> props) {
-		Map<String, MPProperty> currentProps = nodeType.getProperties();
-		boolean modified = false;
-		for (Entry<String, Object> property : props.entrySet()) {
-			String name = normalize(property.getKey());
-			if (!currentProps.containsKey(name)) {
-				MPProperty prop = new MPProperty();
-				prop.setName(name);
-				prop.setDataType(property.getValue() instanceof String ? MPProperty.STRING : MPProperty.DATE);
-				prop.setAutocreated(false);
-				prop.setMandatory(false);
-				prop.setMultiple(false);
-				prop.setValue(null);
-				nodeType.addProperty(prop);
-				modified = true;
-			}
-			values.put(name, property.getValue());
-		}
-		return modified;
-	}
-
-	static String normalize(String name) {
-		return name.replaceAll("[^a-zA-Z0-9]", "_");
 	}
 }
