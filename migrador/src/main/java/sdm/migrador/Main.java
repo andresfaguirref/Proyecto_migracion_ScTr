@@ -56,6 +56,8 @@ public class Main {
 	static String password;
 	static String repository;
 
+	static Args params;
+
 	static Map<Character, Character> chars;
 	static {
 		chars = new HashMap<>();
@@ -74,7 +76,7 @@ public class Main {
 	}
 
 	static synchronized Toc findNext() throws SQLException {
-		if (!runnig || noMore/* || migrados > 100*/) {
+		if (!runnig || noMore || params.maximumRecords > 0 && migrados > params.maximumRecords) {
 			return null;
 		}
 		if (rs.next()) {
@@ -100,7 +102,11 @@ public class Main {
 			psPath.setLong(1, toc.id);
 			try (ResultSet rs = psPath.executeQuery()) {
 				rs.next();
-				toc.file = new File(rs.getString(2), rs.getString(1));
+				if (params.dummyPDF == null) {
+					toc.file = new File(rs.getString(2), rs.getString(1));
+				} else {
+					toc.file = params.dummyPDF;
+				}
 				toc.nodeType = rs.getString(3);
 			}
 
@@ -310,7 +316,11 @@ public class Main {
 					dataNode.setContentFileName(name + ".pdf");
 					dataNode.setMimeType("application/pdf");
 				}
-				cm.persistDataNode(dataNode);
+				try {
+					cm.persistDataNode(dataNode);
+				} catch (RuntimeException e) {
+					throw e;
+				}
 
 				update(toc.id, ruta);
 			}
@@ -327,10 +337,80 @@ public class Main {
 		log.info("Finalizando hilo {}", threadName);
 	}
 
+	static Args parseArgs(String[] args) {
+		Args params = new Args();
+		if (args == null) {
+			return params;
+		}
+		if (args.length == 1) {
+			String arg0 = args[0];
+			if ("reset".equals(arg0)) {
+				params.reset = true;
+				return params;
+			}
+			if ("help".equals(arg0)) {
+				params.help = true;
+				return params;
+			}
+		}
+		for (String arg : args) {
+			String[] parts = arg.split("=");
+			if (parts.length != 2) {
+				log.error("Argumento mal formado {}", arg);
+				return null;
+			}
+			String name = parts[0];
+			String value = parts[1];
+			try {
+				switch (name) {
+					case "dummy":
+						params.dummyPDF = new File(value);
+						if (!params.dummyPDF.exists()) {
+							log.error("No existe el archivo {}", value);
+							return null;
+						}
+						break;
+					case "threads":
+						params.totalThreads = Integer.parseInt(value);
+						if (params.totalThreads < 1) {
+							params.totalThreads = 1;
+						}
+						break;
+					case "max":
+						params.maximumRecords = Integer.parseInt(value);
+						break;
+					default:
+						log.error("No se reconoce argumento {}", name);
+						return null;
+				}
+			} catch (NumberFormatException e) {
+				log.error("Numero incorrecto {}", value);
+				log.debug(e.toString());
+				return null;
+			}
+		}
+		return params;
+	}
+
+	static void printHelp() {
+		log.info("\nArgumentos:\n");
+		log.info("help # muestra la ayuda\n");
+		log.info("reset # limpia el repositorio\n");
+		log.info("[threads=N] # N: cantidad de hilos a ejecutar en paralelo (1 por defecto)");
+		log.info("[max=N] # N: cantidad de registros a migrar (ilimitado por defecto)");
+		log.info("[dummy=FILE] # FILE: ruta de archivo de prueba a migrar (solo para pruebas)");
+	}
+
 	public static void main(String[] args) throws Exception {
-		if (args != null && args.length > 1) {
-			log.error("Parametros incorrectos");
+		params = parseArgs(args);
+		if (params == null) {
+			printHelp();
 			System.exit(1);
+			return;
+		}
+
+		if (params.help) {
+			printHelp();
 			return;
 		}
 
@@ -343,40 +423,28 @@ public class Main {
 		password = migradorProps.getProperty("password");
 		repository = migradorProps.getProperty("repository");
 
-		int total = 1;
-		if (args != null && args.length == 1) {
-			if ("reset".equals(args[0])) {
-				log.info("Borrando migracion");
-				ContainerManager cm = ecm();
-				try {
-					for (MPDataNode node : cm.retrieveChildDataNodesByPath("/")) {
-						cm.removeDataNodeWithDescendants(node.getAbsolutePath());
-					}
-					for (MPNodeType type : cm.retrieveAllNodeTypes()) {
-						cm.removeNodeType(type.getNodeName());
-					}
-				} finally {
-					cm.closeResources();
-					DocumentStoreManager.destroyStores();
+		if (params.reset) {
+			log.info("Borrando migracion");
+			ContainerManager cm = ecm();
+			try {
+				for (MPDataNode node : cm.retrieveChildDataNodesByPath("/")) {
+					cm.removeDataNodeWithDescendants(node.getAbsolutePath());
 				}
-
-				try (Connection conn = DriverManager.getConnection(dbProps.getProperty("url"), dbProps)) {
-					try (PreparedStatement ps = conn.prepareStatement("delete from dbo.migrados where tocid > 1")) {
-						ps.executeUpdate();
-					}
+				for (MPNodeType type : cm.retrieveAllNodeTypes()) {
+					cm.removeNodeType(type.getNodeName());
 				}
-				log.info("Finalizado borrado migracion");
-				return;
+			} finally {
+				cm.closeResources();
+				DocumentStoreManager.destroyStores();
 			}
-			total = Integer.parseInt(args[0]);
-			if (total < 1) {
-				throw new IllegalArgumentException(args[0]);
-			}
-		}
 
-		threads = new Thread[total];
-		for (int i = 0; i < total; i++) {
-			threads[i] = new Thread(Main::hilo);
+			try (Connection conn = DriverManager.getConnection(dbProps.getProperty("url"), dbProps)) {
+				try (PreparedStatement ps = conn.prepareStatement("delete from dbo.migrados where tocid > 1")) {
+					ps.executeUpdate();
+				}
+			}
+			log.info("Finalizado borrado migracion");
+			return;
 		}
 
 		Runtime.getRuntime().addShutdownHook(new Thread(Main::stop));
@@ -418,8 +486,10 @@ public class Main {
 			cm.closeResources();
 		}
 
-		for (Thread t : threads) {
-			t.start();
+		threads = new Thread[params.totalThreads];
+		for (int i = 0; i < params.totalThreads; i++) {
+			threads[i] = new Thread(Main::hilo);
+			threads[i].start();
 		}
 	}
 }
