@@ -25,6 +25,7 @@ import com.macroproyectos.ecm.node.MPDataNode;
 import com.macroproyectos.ecm.node.MPNodeType;
 import com.macroproyectos.ecm.node.MPProperty;
 import com.macroproyectos.ecm.store.DocumentStoreManager;
+import com.macroproyectos.plantillas.pdf.oo.PDFManager;
 
 public class Main {
 
@@ -153,6 +154,10 @@ public class Main {
 		}
 	}
 
+	static void stopECM() {
+		DocumentStoreManager.destroyStores();
+	}
+
 	static void stop() {
 		log.info("Finalizando migracion");
 		runnig = false;
@@ -171,7 +176,6 @@ public class Main {
 		close(rs);
 		close(ps);
 		close(conn);
-		DocumentStoreManager.destroyStores();
 		log.info("Total migrados {}", migrados);
 		log.info("Migracion finalizada");
 	}
@@ -312,7 +316,8 @@ public class Main {
 				dataNode.setParent(toc.path);
 
 				if (toc.isFile()) {
-					dataNode.setContent(Files.readAllBytes(toc.file.toPath()));
+					byte[] bytes = pdfA(toc.file);
+					dataNode.setContent(bytes);
 					dataNode.setContentFileName(name + ".pdf");
 					dataNode.setMimeType("application/pdf");
 				}
@@ -324,7 +329,7 @@ public class Main {
 
 				update(toc.id, ruta);
 			}
-		} catch (SQLException | IOException e) {
+		} catch (SQLException e) {
 			throw new MException(e);
 		} finally {
 			try {
@@ -335,6 +340,29 @@ public class Main {
 		}
 
 		log.info("Finalizando hilo {}", threadName);
+	}
+
+	private static byte[] pdfA(File file) {
+		byte[] bytes;
+		PDFManager pdf = new PDFManager();
+		try {
+			pdf.load(Files.readAllBytes(file.toPath()), "tiff");
+			pdf.convertToPDFA();
+			bytes = pdf.getFile();
+		} catch (Exception e) {
+			log.error("Documento {} no es tiff {}", file, e);
+			try {
+				pdf.load(Files.readAllBytes(file.toPath()), "pdf");
+				pdf.convertToPDFA();
+				bytes = pdf.getFile();
+			} catch (Exception e1) {
+				log.error("Documento {} no es pdf {}", file, e1);
+				throw new MException(e);
+			}
+		} finally {
+			pdf.close();
+		}
+		return bytes;
 	}
 
 	static Args parseArgs(String[] args) {
@@ -423,19 +451,24 @@ public class Main {
 		password = migradorProps.getProperty("password");
 		repository = migradorProps.getProperty("repository");
 
+		Runtime.getRuntime().addShutdownHook(new Thread(Main::stopECM));
+
 		if (params.reset) {
 			log.info("Borrando migracion");
 			ContainerManager cm = ecm();
 			try {
 				for (MPDataNode node : cm.retrieveChildDataNodesByPath("/")) {
-					cm.removeDataNodeWithDescendants(node.getAbsolutePath());
+					String path = node.getAbsolutePath();
+					log.info("Borrando carpeta {}", path);
+					cm.removeDataNodeWithDescendants(path);
 				}
 				for (MPNodeType type : cm.retrieveAllNodeTypes()) {
-					cm.removeNodeType(type.getNodeName());
+					String name = type.getNodeName();
+					log.info("Borrando tipo {}", name);
+					cm.removeNodeType(name);
 				}
 			} finally {
 				cm.closeResources();
-				DocumentStoreManager.destroyStores();
 			}
 
 			try (Connection conn = DriverManager.getConnection(dbProps.getProperty("url"), dbProps)) {

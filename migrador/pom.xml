@@ -88,6 +88,47 @@
 			<scope>system</scope>
 			<systemPath>${project.basedir}/lib/mpErrors-4.0.4.jar</systemPath>
 		</dependency>
+		<dependency>
+			<groupId>mpPdfAPI</groupId>
+			<artifactId>mpPdfAPI</artifactId>
+			<version>2.0.2</version>
+			<scope>system</scope>
+			<systemPath>${project.basedir}/lib/mpPdfAPI-2.0.2.jar</systemPath>
+		</dependency>
+		<dependency>
+			<groupId>com.aspose</groupId>
+			<artifactId>pdf</artifactId>
+			<version>17.7</version>
+			<scope>system</scope>
+			<systemPath>${project.basedir}/lib/pdf-17.7.jar</systemPath>
+		</dependency>
+		<dependency>
+			<groupId>com.aspose</groupId>
+			<artifactId>words</artifactId>
+			<version>17.6.0</version>
+			<scope>system</scope>
+			<systemPath>${project.basedir}/lib/words-17.6.0.jar</systemPath>
+		</dependency>
+		<dependency>
+			<groupId>com.aspose</groupId>
+			<artifactId>cells</artifactId>
+			<version>17.3.0</version>
+			<scope>system</scope>
+			<systemPath>${project.basedir}/lib/cells-17.3.0.jar</systemPath>
+		</dependency>
+		<dependency>
+			<groupId>com.aspose</groupId>
+			<artifactId>slides</artifactId>
+			<version>17.7</version>
+			<scope>system</scope>
+			<systemPath>${project.basedir}/lib/slides-17.7.jar</systemPath>
+		</dependency>
+		<dependency>
+			<groupId>com.github.jai-imageio</groupId>
+			<artifactId>jai-imageio-core</artifactId>
+			<version>1.4.0</version>
+		</dependency>
+
 	</dependencies>
 
 	<build>
