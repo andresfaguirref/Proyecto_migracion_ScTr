@@ -56,6 +56,7 @@ public class Main {
 	static String username;
 	static String password;
 	static String repository;
+	static File basePath;
 
 	static Args params;
 
@@ -104,7 +105,7 @@ public class Main {
 			try (ResultSet rs = psPath.executeQuery()) {
 				rs.next();
 				if (params.dummyPDF == null) {
-					toc.file = new File(rs.getString(2), rs.getString(1));
+					toc.file = new File(new File(basePath, rs.getString(2)), rs.getString(1));
 				} else {
 					toc.file = params.dummyPDF;
 				}
@@ -162,8 +163,10 @@ public class Main {
 		log.info("Finalizando migracion");
 		runnig = false;
 		try {
-			for (Thread t : threads) {
-				t.join();
+			if (threads != null) {
+				for (Thread t : threads) {
+					t.join();
+				}
 			}
 		} catch (InterruptedException e) {
 			log.error("", e);
@@ -391,25 +394,25 @@ public class Main {
 			String value = parts[1];
 			try {
 				switch (name) {
-					case "dummy":
-						params.dummyPDF = new File(value);
-						if (!params.dummyPDF.exists()) {
-							log.error("No existe el archivo {}", value);
-							return null;
-						}
-						break;
-					case "threads":
-						params.totalThreads = Integer.parseInt(value);
-						if (params.totalThreads < 1) {
-							params.totalThreads = 1;
-						}
-						break;
-					case "max":
-						params.maximumRecords = Integer.parseInt(value);
-						break;
-					default:
-						log.error("No se reconoce argumento {}", name);
+				case "dummy":
+					params.dummyPDF = new File(value);
+					if (!params.dummyPDF.exists()) {
+						log.error("No existe el archivo {}", value);
 						return null;
+					}
+					break;
+				case "threads":
+					params.totalThreads = Integer.parseInt(value);
+					if (params.totalThreads < 1) {
+						params.totalThreads = 1;
+					}
+					break;
+				case "max":
+					params.maximumRecords = Integer.parseInt(value);
+					break;
+				default:
+					log.error("No se reconoce argumento {}", name);
+					return null;
 				}
 			} catch (NumberFormatException e) {
 				log.error("Numero incorrecto {}", value);
@@ -450,6 +453,12 @@ public class Main {
 		username = migradorProps.getProperty("username");
 		password = migradorProps.getProperty("password");
 		repository = migradorProps.getProperty("repository");
+		basePath = new File(migradorProps.getProperty("basePath"));
+		if (!basePath.exists()) {
+			log.info("No existe ruta base {}", basePath);
+			System.exit(1);
+			return;
+		}
 
 		Runtime.getRuntime().addShutdownHook(new Thread(Main::stopECM));
 
