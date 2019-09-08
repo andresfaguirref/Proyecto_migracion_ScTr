@@ -165,7 +165,9 @@ public class Main {
 		try {
 			if (threads != null) {
 				for (Thread t : threads) {
+					log.info("Esperando hilo {}", t.getName());
 					t.join();
+					log.info("Finalizado hilo {}", t.getName());
 				}
 			}
 		} catch (InterruptedException e) {
@@ -179,6 +181,7 @@ public class Main {
 		close(rs);
 		close(ps);
 		close(conn);
+		stopECM();
 		log.info("Total migrados {}", migrados);
 		log.info("Migracion finalizada");
 	}
@@ -460,7 +463,8 @@ public class Main {
 			return;
 		}
 
-		Runtime.getRuntime().addShutdownHook(new Thread(Main::stopECM));
+		Thread stopECM = new Thread(Main::stopECM);
+		Runtime.getRuntime().addShutdownHook(stopECM);
 
 		if (params.reset) {
 			log.info("Borrando migracion");
@@ -489,6 +493,7 @@ public class Main {
 			return;
 		}
 
+		Runtime.getRuntime().removeShutdownHook(stopECM);
 		Runtime.getRuntime().addShutdownHook(new Thread(Main::stop));
 
 		conn = DriverManager.getConnection(dbProps.getProperty("url"), dbProps);
