@@ -3,7 +3,6 @@ package sdm.migrador;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.file.Files;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
@@ -78,7 +77,7 @@ public class Main {
 	}
 
 	static synchronized Toc findNext() throws SQLException {
-		if (!runnig || noMore || params.maximumRecords > 0 && migrados > params.maximumRecords) {
+		if (!runnig || noMore || params.maximumRecords > 0 && migrados >= params.maximumRecords) {
 			return null;
 		}
 		if (rs.next()) {
@@ -321,14 +320,16 @@ public class Main {
 				dataNode.setProperties(props);
 				dataNode.setParent(toc.path);
 
+				String temporalFileName=null;
 				if (toc.isFile()) {
-					byte[] bytes = pdfA(toc.file);
-					dataNode.setContent(bytes);
-					dataNode.setContentFileName(name + ".pdf");
+					String fileName = name + ".pdf";
+					temporalFileName = cm.getRandomFileName(fileName);
+					pdfA(toc.file, new File(cm.getTemporalFilesFolder(), temporalFileName));
+					dataNode.setContentFileName(fileName);
 					dataNode.setMimeType("application/pdf");
 				}
 				try {
-					cm.persistDataNode(dataNode);
+					cm.persistDataNode(dataNode, temporalFileName);
 				} catch (RuntimeException e) {
 					throw e;
 				}
@@ -348,27 +349,23 @@ public class Main {
 		log.info("Finalizando hilo {}", threadName);
 	}
 
-	private static byte[] pdfA(File file) {
-		byte[] bytes;
+	private static void pdfA(File src, File dst) {
 		PDFManager pdf = new PDFManager();
 		try {
-			pdf.load(Files.readAllBytes(file.toPath()), "tiff");
+			pdf.load(src.getAbsolutePath(), "tiff", dst.getAbsolutePath());
 			pdf.convertToPDFA();
-			bytes = pdf.getFile();
 		} catch (Exception e) {
-			log.error("Documento {} no es tiff {}", file, e);
+			log.warn("Documento {} no es tiff {}", src, e);
 			try {
-				pdf.load(Files.readAllBytes(file.toPath()), "pdf");
+				pdf.load(src.getAbsolutePath(), "pdf", dst.getAbsolutePath());
 				pdf.convertToPDFA();
-				bytes = pdf.getFile();
 			} catch (Exception e1) {
-				log.error("Documento {} no es pdf {}", file, e1);
+				log.error("Documento {} no es pdf {}", src, e1);
 				throw new MException(e);
 			}
 		} finally {
 			pdf.close();
 		}
-		return bytes;
 	}
 
 	static Args parseArgs(String[] args) {
