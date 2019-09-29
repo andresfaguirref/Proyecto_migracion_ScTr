@@ -8,5 +8,5 @@ public class Args {
 	int totalThreads = 1;
 	File dummyPDF;
 	int maximumRecords;
-	boolean stop;
+	boolean stop = true;
 }
