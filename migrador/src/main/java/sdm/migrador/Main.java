@@ -140,7 +140,9 @@ public class Main {
 		if (tif) {
 			sb.append(".tif");
 		}
-		return new File(fixpath, sb.toString());
+		File file = new File(fixpath, sb.toString());
+		log.info("Cargando archivo: {}", file.getAbsolutePath());
+		return file;
 	}
 
 	static void makeTif(String fixpath, long tocId, File dst) throws SQLException, IOException {
@@ -564,6 +566,7 @@ public class Main {
 		log.info("[threads=N] # N: cantidad de hilos a ejecutar en paralelo (1 por defecto)");
 		log.info("[max=N] # N: cantidad de registros a migrar (ilimitado por defecto)");
 		log.info("[dummy=FILE] # FILE: ruta de archivo de prueba a migrar (solo para pruebas)");
+		log.info("[stop=true/false] # Indica si se detiene en caso de fallo o continua con el siguiente");
 	}
 
 	public static void main(String[] args) throws Exception {
