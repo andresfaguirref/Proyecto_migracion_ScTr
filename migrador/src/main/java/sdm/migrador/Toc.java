@@ -8,6 +8,8 @@ public class Toc {
 	String name;
 	String path;
 	int type;
+	String ext;
+	String fixpath;
 	File file;
 	String nodeType;
 	Map<String, Object> properties;
