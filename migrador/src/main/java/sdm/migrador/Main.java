@@ -145,7 +145,7 @@ public class Main {
 		return file;
 	}
 
-	static void makeTif(String fixpath, long tocId, File dst) throws SQLException, IOException {
+	static void makePdfTif(String fixpath, long tocId, File dst) throws SQLException, IOException {
 		psTif.setLong(1, tocId);
 		try (ResultSet rs = psTif.executeQuery()) {
 			Document doc = new Document();
@@ -206,7 +206,7 @@ public class Main {
 				if (params.dummyPDF == null) {
 					String fixpath = realPath(rs.getString(2));
 					if (toc.ext == null) {
-						toc.ext = "tif";
+						toc.ext = "pdf";
 						toc.fixpath = fixpath;
 					} else {
 						toc.ext = rs.getString(1);
@@ -411,7 +411,7 @@ public class Main {
 				temporalFileName = cm.getRandomFileName(fileName);
 				File dst = new File(cm.getTemporalFilesFolder(), temporalFileName);
 				if (toc.file == null) {
-					makeTif(toc.fixpath, toc.id, dst);
+					makePdfTif(toc.fixpath, toc.id, dst);
 				} else {
 					pdfA(toc.file, dst, toc.ext);
 				}
