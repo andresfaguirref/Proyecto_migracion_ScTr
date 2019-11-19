@@ -546,6 +546,9 @@ public class Main {
 				case "stop":
 					params.stop = Boolean.parseBoolean(value);
 					break;
+				case "folder":
+					params.folder = value;
+					break;
 				default:
 					log.error("No se reconoce argumento {}", name);
 					return null;
@@ -645,8 +648,16 @@ public class Main {
 			delete.executeUpdate();
 		}
 
-		ps = conn.prepareStatement(
-				"select t.tocid, t.name, p.path, t.etype from dbo.toc t join dbo.migrados p on p.tocid = t.parentid left join dbo.migrados m on m.tocid = t.tocid where m.tocid is null and p.path is not null /*and t.etype = 0*/");
+		String sql = "select t.tocid, t.name, p.path, t.etype from dbo.toc t join dbo.migrados p on p.tocid = t.parentid left join dbo.migrados m on m.tocid = t.tocid where m.tocid is null and p.path is not null /*and t.etype = 0*/";
+		if (params.folder != null) {
+			sql += " and (lower(p.path) like ? or lower(t.name) like ?)";
+		}
+		ps = conn.prepareStatement(sql);
+		if (params.folder != null) {
+			String param = "%" + params.folder.toLowerCase() + "%";
+			ps.setString(1, param);
+			ps.setString(2, param);
+		}
 		rs = ps.executeQuery();
 		psInsert = conn.prepareStatement("insert into dbo.migrados (tocid) values (?)");
 		psUpdate = conn.prepareStatement("update dbo.migrados set path = ? where tocid = ?");

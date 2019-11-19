@@ -9,4 +9,5 @@ public class Args {
 	File dummyPDF;
 	int maximumRecords;
 	boolean stop = true;
+	String folder;
 }
