@@ -570,6 +570,7 @@ public class Main {
 		log.info("[max=N] # N: cantidad de registros a migrar (ilimitado por defecto)");
 		log.info("[dummy=FILE] # FILE: ruta de archivo de prueba a migrar (solo para pruebas)");
 		log.info("[stop=true/false] # Indica si se detiene en caso de fallo o continua con el siguiente");
+		log.info("[folder=nombrecarpeta] # Nombre de la carpeta a filtrar");
 	}
 
 	public static void main(String[] args) throws Exception {
@@ -650,13 +651,12 @@ public class Main {
 
 		String sql = "select t.tocid, t.name, p.path, t.etype from dbo.toc t join dbo.migrados p on p.tocid = t.parentid left join dbo.migrados m on m.tocid = t.tocid where m.tocid is null and p.path is not null /*and t.etype = 0*/";
 		if (params.folder != null) {
-			sql += " and (lower(p.path) like ? or lower(t.name) like ?)";
+			sql += " and concat(lower(p.path), '/', lower(t.name)) like ?";
 		}
 		ps = conn.prepareStatement(sql);
 		if (params.folder != null) {
 			String param = "%" + params.folder.toLowerCase() + "%";
 			ps.setString(1, param);
-			ps.setString(2, param);
 		}
 		rs = ps.executeQuery();
 		psInsert = conn.prepareStatement("insert into dbo.migrados (tocid) values (?)");
