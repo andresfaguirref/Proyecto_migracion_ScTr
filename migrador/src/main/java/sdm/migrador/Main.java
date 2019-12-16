@@ -651,7 +651,7 @@ public class Main {
 
 		String sql = "select t.tocid, t.name, p.path, t.etype from dbo.toc t join dbo.migrados p on p.tocid = t.parentid left join dbo.migrados m on m.tocid = t.tocid where m.tocid is null and p.path is not null /*and t.etype = 0*/";
 		if (params.folder != null) {
-			sql += " and concat(lower(p.path), '/', lower(t.name)) like ?";
+			sql += " and lower(p.path) + '/' + lower(t.name) like ?";
 		}
 		ps = conn.prepareStatement(sql);
 		if (params.folder != null) {
