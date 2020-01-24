@@ -40,6 +40,7 @@ import com.aspose.words.RelativeHorizontalPosition;
 import com.aspose.words.RelativeVerticalPosition;
 import com.aspose.words.WrapType;
 import com.macroproyectos.ecm.ContainerManager;
+import com.macroproyectos.ecm.config.ConfigFile;
 import com.macroproyectos.ecm.node.MPDataNode;
 import com.macroproyectos.ecm.node.MPNodeType;
 import com.macroproyectos.ecm.node.MPProperty;
@@ -71,7 +72,7 @@ public class Main {
 	static MPNodeType archivo;
 	static Map<String, MPNodeType> nodeTypes;
 
-	static Pattern regex = Pattern.compile("[^a-zA-Z0-9]");
+	static Pattern regex = Pattern.compile("^_|[^a-zA-Z0-9_]");
 
 	static String username;
 	static String password;
@@ -329,8 +330,14 @@ public class Main {
 	static String normalize(String name) {
 		Matcher matcher = regex.matcher(name);
 		if (matcher.find()) {
-			StringBuilder sb = new StringBuilder(name.length());
+			StringBuilder sb;
 			int index = 0;
+			if (name.charAt(0) == '_') {
+				sb = new StringBuilder(name.length() + 1);
+				sb.append('A');
+			} else {
+				sb = new StringBuilder(name.length());
+			}
 			do {
 				int start = matcher.start();
 				for (int i = index; i < start; i++) {
@@ -612,6 +619,8 @@ public class Main {
 
 		Thread stopECM = new Thread(Main::stopECM);
 		Runtime.getRuntime().addShutdownHook(stopECM);
+
+		ConfigFile.loadProperties();
 
 		if (params.reset) {
 			log.info("Borrando migracion");
