@@ -206,11 +206,11 @@ public class Main {
 				rs.next();
 				if (params.dummyPDF == null) {
 					String fixpath = realPath(rs.getString(2));
+					toc.ext = rs.getString(1);
 					if (toc.ext == null) {
 						toc.ext = "pdf";
 						toc.fixpath = fixpath;
 					} else {
-						toc.ext = rs.getString(1);
 						toc.file = path(fixpath, rs.getInt(4), new StringBuilder("e"), false);
 						if (!toc.file.exists()) {
 							throw new FileNotFoundException(toc.file.getAbsolutePath());
